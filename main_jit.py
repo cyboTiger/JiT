@@ -4,6 +4,7 @@ import numpy as np
 import os
 import time
 from pathlib import Path
+import wandb
 
 import torch
 import torch.backends.cudnn as cudnn
@@ -86,7 +87,7 @@ def get_args_parser():
                         help='Generation batch size')
 
     # dataset
-    parser.add_argument('--data_path', default='./data/imagenet', type=str,
+    parser.add_argument('--data_path', default='/home/ruihan/data/imagenet', type=str,
                         help='Path to the dataset')
     parser.add_argument('--class_num', default=1000, type=int)
 
@@ -129,10 +130,22 @@ def main(args):
     num_tasks = misc.get_world_size()
     global_rank = misc.get_rank()
 
+    # wandb setup
+    train_name = 'pretrain'
+    val_name = 'eval'
+    proj_name = val_name if args.evaluate_gen else train_name
+    run_name =  args.model if args.evaluate_gen else f"run-blr-{args.blr}-lr_sched-{args.lr_schedule}" 
+    wandb.init(
+        project=f"JiT-Original-{proj_name}-with-ImageNet-TrainSet",     # 设置项目名称
+        name=run_name,  # 设置本次运行的名称 (方便区分)
+        config=args                     # 可选：将所有命令行参数记录为超参数
+    )
+
     # Set up TensorBoard logging (only on main process)
     if global_rank == 0 and args.output_dir is not None:
         os.makedirs(args.output_dir, exist_ok=True)
-        log_writer = SummaryWriter(log_dir=args.output_dir)
+        log_dir = os.path.join(args.output_dir, 'tf_logs')
+        log_writer = SummaryWriter(log_dir=log_dir)
     else:
         log_writer = None
 
@@ -190,6 +203,7 @@ def main(args):
     # Resume from checkpoint if provided
     checkpoint_path = os.path.join(args.resume, "checkpoint-last.pth") if args.resume else None
     if checkpoint_path and os.path.exists(checkpoint_path):
+        torch.serialization.add_safe_globals([argparse.Namespace])
         checkpoint = torch.load(checkpoint_path, map_location='cpu')
         model_without_ddp.load_state_dict(checkpoint['model'])
 
@@ -255,6 +269,7 @@ def main(args):
         if misc.is_main_process() and log_writer is not None:
             log_writer.flush()
 
+    wandb.finish()
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time:', total_time_str)

@@ -11,6 +11,7 @@ import util.misc as misc
 import util.lr_sched as lr_sched
 import torch_fidelity
 import copy
+import wandb
 
 
 def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, epoch, log_writer=None, args=None):
@@ -56,12 +57,33 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
 
         loss_value_reduce = misc.all_reduce_mean(loss_value)
 
-        if log_writer is not None:
-            # Use epoch_1000x as the x-axis in TensorBoard to calibrate curves.
+        # if log_writer is not None:
+        #     # Use epoch_1000x as the x-axis in TensorBoard to calibrate curves.
+        #     epoch_1000x = int((data_iter_step / len(data_loader) + epoch) * 1000)
+        #     if data_iter_step % args.log_freq == 0:
+        #         log_writer.add_scalar('train_loss', loss_value_reduce, epoch_1000x)
+        #         log_writer.add_scalar('lr', lr, epoch_1000x)
+
+        # ====== WANDB 和 TensorBoard 日志记录逻辑 ======
+        if log_writer is not None or wandb.run is not None:
+            """ We use epoch_1000x as the x-axis in tensorboard/wandb.
+            This calibrates different curves when batch size changes.
+            """
             epoch_1000x = int((data_iter_step / len(data_loader) + epoch) * 1000)
-            if data_iter_step % args.log_freq == 0:
+
+            # 1. TensorBoard 记录
+            if log_writer is not None:
                 log_writer.add_scalar('train_loss', loss_value_reduce, epoch_1000x)
                 log_writer.add_scalar('lr', lr, epoch_1000x)
+
+            # 2. WANDB 记录 (新增部分)
+            if wandb.run is not None:
+                # 使用 wandb.log 记录 Loss 和 LR
+                wandb.log({
+                    'train_loss': loss_value_reduce,
+                    'lr': lr
+                }, step=epoch_1000x) # 将 epoch_1000x 作为 x 轴的 step
+        # ============================================
 
 
 def evaluate(model_without_ddp, args, epoch, batch_size=64, log_writer=None):
@@ -156,6 +178,13 @@ def evaluate(model_without_ddp, args, epoch, batch_size=64, log_writer=None):
         log_writer.add_scalar('fid{}'.format(postfix), fid, epoch)
         log_writer.add_scalar('is{}'.format(postfix), inception_score, epoch)
         print("FID: {:.4f}, Inception Score: {:.4f}".format(fid, inception_score))
+        if wandb.run is not None:
+            # 使用 wandb.log 记录 Loss 和 LR
+            epoch_1000x = int((1 + epoch) * 1000)
+            wandb.log({
+                'fid': fid,
+                'is_score': inception_score
+            }, step=epoch_1000x) # 将 epoch_1000x 作为 x 轴的 step
         shutil.rmtree(save_folder)
 
     torch.distributed.barrier()
